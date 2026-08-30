@@ -1,0 +1,5 @@
+{
+  "summary": "Added getHeroSlides, getTestimonials, and getGalleryItems helpers in payload-api.ts",
+  "updatedAt": "2026-08-24T23:31:27.370287200Z",
+  "userFacing": true
+}

@@ -1,0 +1,320 @@
+// Rajendra Hospital — Prisma Schema
+// Database: PostgreSQL (Neon for dev, Railway for production)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  RESCHEDULED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum InquiryStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+  SPAM
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  CONTENT_ADMIN
+  APPOINTMENT_STAFF
+  EDITOR
+}
+
+enum DepartmentStatus {
+  PUBLISHED
+  DRAFT
+}
+
+enum DoctorStatus {
+  PUBLISHED
+  DRAFT
+  UNPUBLISHED
+}
+
+// =============================================================================
+// USER & AUTH
+// =============================================================================
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(EDITOR)
+  name         String
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  lastLoginAt  DateTime? @map("last_login_at")
+
+  // Relations
+  auditLogs    AuditLog[]
+  appointments Appointment[] @relation("UpdatedByUser")
+
+  @@map("users")
+}
+
+// =============================================================================
+// DEPARTMENTS
+// =============================================================================
+
+model Department {
+  id               String           @id @default(cuid())
+  name             String
+  slug             String           @unique
+  shortDescription String?          @map("short_description") @db.VarChar(300)
+  description      String?          @db.Text
+  featuredImageId  String?          @map("featured_image_id")
+  heroImageId      String?          @map("hero_image_id")
+  status           DepartmentStatus @default(DRAFT)
+  displayOrder     Int              @default(0) @map("display_order")
+  seoTitle         String?          @map("seo_title") @db.VarChar(70)
+  seoDescription   String?          @map("seo_description") @db.VarChar(160)
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  featuredImage MediaAsset?   @relation("DepartmentFeaturedImage", fields: [featuredImageId], references: [id])
+  heroImage     MediaAsset?   @relation("DepartmentHeroImage", fields: [heroImageId], references: [id])
+  doctors       Doctor[]
+
+  @@index([slug])
+  @@index([status, displayOrder])
+  @@map("departments")
+}
+
+// =============================================================================
+// DOCTORS
+// =============================================================================
+
+model Doctor {
+  id             String       @id @default(cuid())
+  name           String
+  slug           String       @unique
+  title          String?      // e.g. "Dr." — CLIENT CONFIRMATION REQUIRED
+  qualifications String?      @db.VarChar(500) // CLIENT CONFIRMATION REQUIRED
+  specialty      String?
+  departmentId   String?      @map("department_id")
+  bio            String?      @db.Text // Real bio — NOT the old placeholder
+  photoAssetId   String?      @map("photo_asset_id")
+  experience     String?      @db.VarChar(100) // e.g. "15+ years"
+  status         DoctorStatus @default(DRAFT)
+  displayOrder   Int          @default(0) @map("display_order")
+  seoTitle       String?      @map("seo_title") @db.VarChar(70)
+  seoDescription String?      @map("seo_description") @db.VarChar(160)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  department   Department?  @relation(fields: [departmentId], references: [id])
+  photo        MediaAsset?  @relation(fields: [photoAssetId], references: [id])
+
+  @@index([slug])
+  @@index([status])
+  @@index([departmentId])
+  @@map("doctors")
+}
+
+// =============================================================================
+// APPOINTMENTS
+// =============================================================================
+
+model Appointment {
+  id              String            @id @default(cuid())
+  patientName     String            @map("patient_name")
+  patientPhone    String            @map("patient_phone") @db.VarChar(20)
+  patientEmail    String?           @map("patient_email")
+  departmentId    String?           @map("department_id")
+  departmentName  String?           @map("department_name") // denormalized for safety
+  doctorId        String?           @map("doctor_id")
+  doctorName      String?           @map("doctor_name") // denormalized for safety
+  preferredDate   DateTime?         @map("preferred_date") @db.Date
+  preferredTime   String?           @map("preferred_time") @db.VarChar(20)
+  message         String?           @db.Text
+  status          AppointmentStatus @default(PENDING)
+  consentGiven    Boolean           @default(false) @map("consent_given")
+  updatedById     String?           @map("updated_by_id")
+  notes           String?           @db.Text // Internal staff notes — not shown to patient
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  updatedBy   User?                      @relation("UpdatedByUser", fields: [updatedById], references: [id])
+  statusHistory AppointmentStatusHistory[]
+
+  @@index([status])
+  @@index([patientPhone])
+  @@index([preferredDate])
+  @@map("appointments")
+}
+
+model AppointmentStatusHistory {
+  id            String            @id @default(cuid())
+  appointmentId String            @map("appointment_id")
+  fromStatus    AppointmentStatus? @map("from_status")
+  toStatus      AppointmentStatus @map("to_status")
+  changedAt     DateTime          @default(now()) @map("changed_at")
+  note          String?
+
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([appointmentId])
+  @@map("appointment_status_history")
+}
+
+// =============================================================================
+// CONTACT INQUIRIES
+// =============================================================================
+
+model ContactInquiry {
+  id        String        @id @default(cuid())
+  name      String
+  phone     String?       @db.VarChar(20)
+  email     String?
+  subject   String?       @db.VarChar(200)
+  message   String        @db.Text
+  status    InquiryStatus @default(NEW)
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("contact_inquiries")
+}
+
+// =============================================================================
+// MEDIA ASSETS
+// =============================================================================
+
+model MediaAsset {
+  id          String   @id @default(cuid())
+  storageKey  String   @unique @map("storage_key") // R2 object key
+  filename    String
+  mimeType    String   @map("mime_type")
+  width       Int?
+  height      Int?
+  sizeBytes   Int      @map("size_bytes")
+  altText     String?  @map("alt_text")
+  caption     String?
+  uploadedById String? @map("uploaded_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Reverse relations
+  departmentsFeatured Department[] @relation("DepartmentFeaturedImage")
+  departmentsHero     Department[] @relation("DepartmentHeroImage")
+  doctors             Doctor[]
+  galleryItems        GalleryItem[]
+
+  @@index([mimeType])
+  @@map("media_assets")
+}
+
+// =============================================================================
+// GALLERY
+// =============================================================================
+
+model GalleryItem {
+  id           String   @id @default(cuid())
+  assetId      String   @map("asset_id")
+  title        String?
+  caption      String?
+  displayOrder Int      @default(0) @map("display_order")
+  isPublished  Boolean  @default(false) @map("is_published")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  asset MediaAsset @relation(fields: [assetId], references: [id])
+
+  @@index([isPublished, displayOrder])
+  @@map("gallery_items")
+}
+
+// =============================================================================
+// TESTIMONIALS
+// =============================================================================
+
+model Testimonial {
+  id           String   @id @default(cuid())
+  reviewerName String   @map("reviewer_name")
+  reviewerRole String?  @map("reviewer_role") // e.g. "Patient", "Doctor"
+  content      String   @db.Text
+  avatarUrl    String?  @map("avatar_url")
+  isPublished  Boolean  @default(false) @map("is_published")
+  displayOrder Int      @default(0) @map("display_order")
+  approvedAt   DateTime? @map("approved_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([isPublished, displayOrder])
+  @@map("testimonials")
+}
+
+// =============================================================================
+// SITE SETTINGS
+// =============================================================================
+
+model SiteSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   @db.Text
+  label     String?  // Human-readable label for admin UI
+  group     String?  // e.g. "contact", "social", "branding"
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([group])
+  @@map("site_settings")
+}
+
+// =============================================================================
+// SEO METADATA (per-page overrides)
+// =============================================================================
+
+model SeoMetadata {
+  id          String   @id @default(cuid())
+  pageKey     String   @unique @map("page_key") // e.g. "home", "about", "contact"
+  title       String?  @db.VarChar(70)
+  description String?  @db.VarChar(160)
+  ogImage     String?  @map("og_image")
+  canonical   String?
+  noIndex     Boolean  @default(false) @map("no_index")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("seo_metadata")
+}
+
+// =============================================================================
+// AUDIT LOGS
+// =============================================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  action     String   // e.g. "doctor.updated", "appointment.status_changed"
+  entityType String?  @map("entity_type") // e.g. "Doctor", "Appointment"
+  entityId   String?  @map("entity_id")
+  prevValue  String?  @map("prev_value") @db.Text // JSON — avoid patient PII
+  newValue   String?  @map("new_value")  @db.Text // JSON
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
